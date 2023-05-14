@@ -1,0 +1,110 @@
+provider "aws" {
+  region  = "us-west-2"
+  profile = "rozaydin"
+}
+
+resource "aws_vpc" "apollo" {
+  cidr_block           = "10.58.0.0/16"
+  enable_dns_hostnames = true
+
+  tags = {
+    Project = "Apollo"
+    Name    = "Apollo VPC"
+  }
+}
+
+resource "aws_subnet" "public_subnets" {
+  depends_on = [
+    aws_vpc.apollo
+  ]
+
+  for_each = var.public_subnets
+
+  vpc_id            = aws_vpc.apollo.id
+  cidr_block        = each.value.cidr_block
+  availability_zone = each.value.availability_zone
+
+  tags = {
+    Project = "Apollo"
+    Name    = "Public Subnet ${each.key}"
+  }
+}
+
+resource "aws_subnet" "private_subnets" {
+  depends_on = [
+    aws_vpc.apollo
+  ]
+
+  for_each = var.private_subnets
+
+  vpc_id            = aws_vpc.apollo.id
+  cidr_block        = each.value.cidr_block
+  availability_zone = each.value.availability_zone
+
+  tags = {
+    Project = "Apollo"
+    Name    = "Private Subnet ${each.key}"
+  }
+}
+
+resource "aws_internet_gateway" "igw" {
+  depends_on = [
+    aws_vpc.apollo
+  ]
+
+  vpc_id = aws_vpc.apollo.id
+
+  tags = {
+    Project = "Apollo"
+    Name    = "Apollo VPC IG"
+  }
+}
+
+resource "aws_eip" "nateip" {
+  for_each = var.public_subnets
+  vpc      = true
+
+  lifecycle {
+    # prevent_destroy = true
+  }
+
+  tags = {
+    Name    = "apollo-natgw-eip"
+    Project = "Apollo"
+  }
+}
+
+
+
+resource "aws_nat_gateway" "ngw" {
+  for_each      = var.public_subnets
+  subnet_id     = aws_subnet.public_subnets[each.key].id
+  allocation_id = aws_eip.nateip[*].id
+
+
+  tags = {
+    Name    = "apollo-ngw"
+    Project = "Apollo"
+  }
+}
+
+resource "aws_route_table" "second_rt" {
+  vpc_id = aws_vpc.apollo.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.igw.id
+  }
+
+  tags = {
+    Project = "Apollo"
+    Name    = "2nd Route Table"
+  }
+}
+
+# resource "aws_route_table_association" "public_subnet_asso" {
+#   count          = length(var.public_subnet_cidrs)
+#   subnet_id      = element(aws_subnet.public_subnets[*].id, count.index)
+#   route_table_id = aws_route_table.second_rt.id
+# }
+
