@@ -101,24 +101,11 @@ resource "aws_ecs_service" "foo_service" {
 
 resource "aws_ecs_task_definition" "foo_task_definition" {
   family = "foo_service"
-  container_definitions = jsonencode([
-    {
-      name      = "nginx"
-      image     = "nginx:bullseye"
-      cpu       = 1024
-      memory    = 2048
-      essential = true
-      portMappings = [
-        {
-          containerPort = 80
-          hostPort      = 80
-        }
-      ]
-    },    
-  ])
-
-  # task_role_arn = ""
-  # execution_role_arn = ""  
+  
+  task_role_arn = "arn:aws:iam::221148627084:role/ecsTaskFullAccess"
+  execution_role_arn = "arn:aws:iam::221148627084:role/ecsTaskExecutionRole"
+  
+  container_definitions = file("task-definitions/service.json")
 
   requires_compatibilities = [ "FARGATE" ]
   cpu = "1024"

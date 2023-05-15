@@ -9,8 +9,8 @@ module "vpc" {
   name = "test-ecs-vpc"
   cidr = "10.58.0.0/16"
 
-  azs             = ["eu-central-1a"]  
-  public_subnets  = ["10.58.1.0/24"]
+  azs             = ["eu-central-1a", "eu-central-1b"]  
+  public_subnets  = ["10.58.1.0/24", "10.58.2.0/24"]
 
   enable_nat_gateway  = false  
   tags = var.tags
@@ -48,6 +48,28 @@ resource "aws_security_group" "allow_http" {
 }
 
 
+resource "aws_security_group" "ecs_tasks" {
+  name        = "ecs-tasks-sg"
+  description = "allow inbound access from the ALB only"
+  vpc_id = module.vpc.vpc_id
+
+  ingress {
+    protocol        = "tcp"
+    from_port       = 80
+    to_port         = 80    
+    security_groups = [aws_security_group.allow_http.id]
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    protocol    = "-1"
+    from_port   = 0
+    to_port     = 0
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+
 resource "aws_ecs_cluster" "foo" {
   name = "foo"  
 }
@@ -64,23 +86,87 @@ resource "aws_ecs_cluster_capacity_providers" "foo_capacity_providers" {
   }
 }
 
+# data "aws_iam_role" "ecs_service_role" {
+#   name = "AWSServiceRoleForECS"
+# }
+
+# resource "aws_lb_target_group" "ecs_foo_tg" {
+#   name        = "ecs-foo-tg"
+#   port        = 80
+#   protocol    = "HTTP"
+#   target_type = "ip"
+#   vpc_id      = module.vpc.vpc_id
+# }
+
+
+output "vpc_public_subnets" {
+  value = module.vpc.public_subnets
+}
+
+
+resource "aws_lb" "ecs_lb" {
+  name               = "alb"
+  subnets            = module.vpc.public_subnets
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.allow_http.id]
+
+  tags = var.tags
+}
+
+resource "aws_lb_listener" "https_forward" {
+  load_balancer_arn = aws_lb.ecs_lb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.ecs_alb_tg.arn
+  }
+}
+
+resource "aws_lb_target_group" "ecs_alb_tg" {
+  name        = "ecs-alb-tg"
+  port        = 80
+  protocol    = "HTTP"
+  vpc_id      = module.vpc.vpc_id
+  target_type = "ip"
+
+  # health_check {
+  #   healthy_threshold   = "3"
+  #   interval            = "90"
+  #   protocol            = "HTTP"
+  #   matcher             = "200-299"
+  #   timeout             = "20"
+  #   path                = "/"
+  #   unhealthy_threshold = "2"
+  # }
+}
+
 resource "aws_ecs_service" "foo_service" {
 
   depends_on = [
-    aws_ecs_task_definition.foo_task_definition
+    aws_ecs_task_definition.foo_task_definition,
+    aws_lb_target_group.ecs_alb_tg
   ]
 
   name            = "foo"
   cluster         = aws_ecs_cluster.foo.id
   task_definition = aws_ecs_task_definition.foo_task_definition.arn
   desired_count   = 1  
+  # iam_role        = data.aws_iam_role.ecs_service_role.arn
 
   launch_type = "FARGATE"
 
   network_configuration {
     subnets = module.vpc.public_subnets
-    security_groups = [aws_security_group.allow_http.id]
+    security_groups = [aws_security_group.ecs_tasks.id]
     assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.ecs_alb_tg.arn
+    container_name   = "nginx"
+    container_port   = 80
   }
   
 }
@@ -100,11 +186,20 @@ resource "aws_ecs_task_definition" "foo_task_definition" {
           hostPort      = 80
         }
       ]
+      logConfiguration = {
+        logDriver: "awslogs",
+        options: {
+          awslogs-group: "filestorage",
+          awslogs-region: "eu-central-1",
+          awslogs-create-group: "true",
+          awslogs-stream-prefix: "filestorage"
+        }
+      }
     },    
   ])
 
-  # task_role_arn = ""
-  # execution_role_arn = ""  
+  # task_role_arn = "arn:aws:iam::221148627084:role/ecsTaskFullAccess"
+  execution_role_arn = "arn:aws:iam::221148627084:role/ecsTaskExecutionRole"
 
   requires_compatibilities = [ "FARGATE" ]
   cpu = "1024"
